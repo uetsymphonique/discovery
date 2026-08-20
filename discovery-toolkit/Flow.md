@@ -1,0 +1,15 @@
+# WNetHelper — Flow
+
+**Entry:** `Program.Main(string[] args)`  ·  **Artifact summary:** local host profile, session identity, running tasks (via perf counter), services (via registry), local group members, filesystem entries, and NBNS host table — all written to stdout
+
+| # | Behavior (`actor action artifact`) | Artifact [class] → consumed by | Tactic / TID — Technique Name | Context (baseline) |
+|---|---|---|---|---|
+| 1 | WNetHelper reads hostname, domain, OS version from environment properties and WMI | stdout [no-artifact] | Discovery / T1082 — System Information Discovery | `Environment.*` property reads + single WMI `Win32_OperatingSystem` query; no child process |
+| 2 | WNetHelper reads current Windows identity, checks admin role, and translates group SIDs to account names | stdout [no-artifact] | Discovery / T1033 — System Owner/User Discovery | `WindowsIdentity.GetCurrent()` + `WindowsPrincipal.IsInRole()` + `Translate(NTAccount)`; in-process only |
+| 3 | WNetHelper opens performance data registry and reads process counter block to enumerate running tasks | stdout [no-artifact] | Discovery / T1057 — Process Discovery | `RegQueryValueEx(HKEY_PERFORMANCE_DATA, "230")` — performance counter API surface, not `NtQuerySystemInformation` |
+| 4 | WNetHelper opens `CurrentControlSet\Services` registry key and reads service subkey values to enumerate Win32 services | stdout [no-artifact] | Discovery / T1007 — System Service Discovery | Direct registry read; no Service Control Manager API interaction (`OpenSCManager`/`EnumServicesStatusEx` absent) |
+| 5 | WNetHelper binds to local computer via WinNT ADSI provider and enumerates local groups and their members | stdout [no-artifact] | Discovery / T1069.001 — Permission Groups Discovery: Local Groups | `DirectoryEntry("WinNT://<hostname>,computer")` — SAMR RPC under the hood but no `net localgroup` child process |
+| 6 | WNetHelper enumerates top-level filesystem entries under target paths | stdout [no-artifact] | Discovery / T1083 — File and Directory Discovery | `Directory.GetFileSystemEntries()` on `C:\Users\`, `C:\Windows\Temp\`, Desktop, Documents |
+| 7 | WNetHelper sends NBNS NAME QUERY REQUEST packets to each IP in target CIDR on UDP/137 | NBNS query packets [network] → #8 | Discovery / T1018 — Remote System Discovery | Burst of sequential UDP/137 from a non-system process; source port is OS-assigned ephemeral; `SIO_UDP_CONNRESET` suppresses ICMP-reset on async recv |
+| 8 | WNetHelper receives NBNS responses and parses hostname, workgroup, DC service flag (`\x1C`), and MAC OUI per host | parsed host records [no-artifact] → #9 | Discovery / T1018 — Remote System Discovery | In-process only; no disk or registry write; MAC OUI map identifies HyperV/VMware/VirtualBox/Parallels/Xen |
+| 9 | WNetHelper writes enumerated host table (IP, `WORKGROUP\HOSTNAME`, DC role, VM platform) to stdout | stdout [no-artifact] | Discovery / T1018 — Remote System Discovery | No file written to disk; output is available only through the process's stdout stream |

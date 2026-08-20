@@ -1,14 +1,14 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace SharpNBTScan
+namespace WNetHelper
 {
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
-    struct nbname
+    struct NameEntry
     {
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
         public char[] ascii_name;
@@ -16,7 +16,7 @@ namespace SharpNBTScan
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
-    struct nbname_response_header
+    struct ResponseHeader
     {
         public UInt16 transaction_id;
         public UInt16 flags;
@@ -34,7 +34,7 @@ namespace SharpNBTScan
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
-    struct nbname_response_footer
+    struct ResponseFooter
     {
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = 6)]
         public byte[] adapter_address;
@@ -62,15 +62,15 @@ namespace SharpNBTScan
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
-    struct nb_host_info
+    struct HostRecord
     {
-        public nbname_response_header header;
-        public nbname[] names;
-        public nbname_response_footer footer;
+        public ResponseHeader header;
+        public NameEntry[] names;
+        public ResponseFooter footer;
         public int is_broken;
     }
 
-    class NBNSResolver
+    class PacketParser
     {
         public static Exception BrokenPacket = new Exception("Broken Packet");
         public static byte get8(byte[] buff, int offset)
@@ -109,88 +109,72 @@ namespace SharpNBTScan
             return Encoding.UTF8.GetString(buff, offset, length).ToCharArray();
         }
 
-        public static nb_host_info NBNSParser(byte[] buff, int buffsize)
+        public static HostRecord ParseResponse(byte[] buff, int buffsize)
         {
             int offset = 0;
             int size = 0;
-            nb_host_info HostInfo = new nb_host_info();
-            nbname_response_header Header = new nbname_response_header();
-            nbname name = new nbname();
-            nbname_response_footer Footer = new nbname_response_footer();
+            HostRecord HostInfo = new HostRecord();
+            ResponseHeader Header = new ResponseHeader();
+            NameEntry name = new NameEntry();
+            ResponseFooter Footer = new ResponseFooter();
 
-            #region dumm head parser
-            //transaction_id
             size = Marshal.SizeOf(Header.transaction_id);
             if (offset + size >= buffsize) throw BrokenPacket;
             Header.transaction_id = get16(buff, offset);
             offset += size;
-            //flags
             size = Marshal.SizeOf(Header.flags);
             if (offset + size >= buffsize) throw BrokenPacket;
             Header.flags = get16(buff, offset);
             offset += size;
-            //question_count
             size = Marshal.SizeOf(Header.question_count);
             if (offset + size >= buffsize) throw BrokenPacket;
             Header.question_count = get16(buff, offset);
             offset += size;
-            //answer_count
             size = Marshal.SizeOf(Header.answer_count);
             if (offset + size >= buffsize) throw BrokenPacket;
             Header.answer_count = get16(buff, offset);
             offset += size;
-            //name_service_count
             size = Marshal.SizeOf(Header.name_service_count);
             if (offset + size >= buffsize) throw BrokenPacket;
             Header.name_service_count = get16(buff, offset);
             offset += size;
-            //additional_record_count
             size = Marshal.SizeOf(Header.additional_record_count);
             if (offset + size >= buffsize) throw BrokenPacket;
             Header.additional_record_count = get16(buff, offset);
             offset += size;
-            // question_name
-            size = getSize(typeof(nbname_response_header), "question_name");
+            size = getSize(typeof(ResponseHeader), "question_name");
             if (offset + size >= buffsize) throw BrokenPacket;
             Header.question_name = getCharArray(buff, offset, size);
             offset += size;
-            //question_type
             size = Marshal.SizeOf(Header.question_type);
             if (offset + size >= buffsize) throw BrokenPacket;
             Header.question_type = get16(buff, offset);
             offset += size;
-            //question_class
             size = Marshal.SizeOf(Header.question_class);
             if (offset + size >= buffsize) throw BrokenPacket;
             Header.question_class = get16(buff, offset);
             offset += size;
-            //ttl
             size = Marshal.SizeOf(Header.ttl);
             if (offset + size >= buffsize) throw BrokenPacket;
             Header.ttl = get32(buff, offset);
             offset += size;
-            //rdata_length
             size = Marshal.SizeOf(Header.rdata_length);
             if (offset + size >= buffsize) throw BrokenPacket;
             Header.rdata_length = get16(buff, offset);
             offset += size;
-            //number_of_names
             size = Marshal.SizeOf(Header.number_of_names);
             if (offset + size >= buffsize) throw BrokenPacket;
             Header.number_of_names = get8(buff, offset);
             offset += size;
-            //
             HostInfo.header = Header;
-            #endregion
 
-            #region dumm name_table parser
             size = Marshal.SizeOf(name) * Header.number_of_names;
             if (offset + size >= buffsize) throw BrokenPacket;
-            HostInfo.names = new nbname[Header.number_of_names];
+            HostInfo.names = new NameEntry[Header.number_of_names];
             for (int i = 0; i < HostInfo.names.Length; i++)
             {
-                nbname _name = new nbname();
-                size = getSize(typeof(nbname), "ascii_name");
+                NameEntry _name = new NameEntry();
+                size = getSize(typeof(NameEntry), "ascii_name");
                 _name.ascii_name = getCharArray(buff, offset, size);
                 offset += size;
                 size = Marshal.SizeOf(name.rr_flags);
@@ -199,130 +183,85 @@ namespace SharpNBTScan
                 HostInfo.names[i] = _name;
             }
 
-            #endregion
-
-            #region dumm foot parser
-            //adapter_address
-            size = getSize(typeof(nbname_response_footer), "adapter_address");
+            size = getSize(typeof(ResponseFooter), "adapter_address");
             if (offset + size >= buffsize) throw BrokenPacket;
             Footer.adapter_address = getBytes(buff, offset, size);
             offset += size;
-            //version_major;
             size = Marshal.SizeOf(Footer.version_major);
             if (offset + size >= buffsize) throw BrokenPacket;
             Footer.version_major = get8(buff, offset);
             offset += size;
-            //version_minor;
             size = Marshal.SizeOf(Footer.version_minor);
             if (offset + size >= buffsize) throw BrokenPacket;
             Footer.version_minor = get8(buff, offset);
             offset += size;
-            //duration;
             size = Marshal.SizeOf(Footer.duration);
             if (offset + size >= buffsize) throw BrokenPacket;
             Footer.duration = get16(buff, offset);
             offset += size;
-            //frmps_received;
             size = Marshal.SizeOf(Footer.frmps_received);
             if (offset + size >= buffsize) throw BrokenPacket;
             Footer.frmps_received = get16(buff, offset);
             offset += size;
-            //frmps_transmitted;
             size = Marshal.SizeOf(Footer.frmps_transmitted);
             if (offset + size >= buffsize) throw BrokenPacket;
             Footer.frmps_transmitted = get16(buff, offset);
             offset += size;
-            //iframe_receive_errors;
             size = Marshal.SizeOf(Footer.iframe_receive_errors);
             if (offset + size >= buffsize) throw BrokenPacket;
             Footer.iframe_receive_errors = get16(buff, offset);
             offset += size;
-            //transmit_aborts;
             size = Marshal.SizeOf(Footer.transmit_aborts);
             if (offset + size >= buffsize) throw BrokenPacket;
             Footer.transmit_aborts = get16(buff, offset);
             offset += size;
-            //transmitted;
             size = Marshal.SizeOf(Footer.transmitted);
             if (offset + size >= buffsize) throw BrokenPacket;
             Footer.transmitted = get32(buff, offset);
             offset += size;
-            //received;
             size = Marshal.SizeOf(Footer.received);
             if (offset + size >= buffsize) throw BrokenPacket;
             Footer.received = get32(buff, offset);
             offset += size;
-            //iframe_transmit_errors;
             size = Marshal.SizeOf(Footer.iframe_transmit_errors);
             if (offset + size >= buffsize) throw BrokenPacket;
             Footer.iframe_transmit_errors = get16(buff, offset);
             offset += size;
-            //no_receive_buffer;
             size = Marshal.SizeOf(Footer.no_receive_buffer);
             if (offset + size >= buffsize) throw BrokenPacket;
             Footer.no_receive_buffer = get16(buff, offset);
             offset += size;
-            //tl_timeouts;
             size = Marshal.SizeOf(Footer.tl_timeouts);
             if (offset + size >= buffsize) throw BrokenPacket;
             Footer.tl_timeouts = get16(buff, offset);
             offset += size;
-            //ti_timeouts;
             size = Marshal.SizeOf(Footer.ti_timeouts);
             if (offset + size >= buffsize) throw BrokenPacket;
             Footer.ti_timeouts = get16(buff, offset);
             offset += size;
-            //free_ncbs;
             size = Marshal.SizeOf(Footer.free_ncbs);
             if (offset + size >= buffsize) throw BrokenPacket;
             Footer.free_ncbs = get16(buff, offset);
             offset += size;
-            //ncbs;
             size = Marshal.SizeOf(Footer.ncbs);
             if (offset + size >= buffsize) throw BrokenPacket;
             Footer.ncbs = get16(buff, offset);
             offset += size;
-            //max_ncbs;
             size = Marshal.SizeOf(Footer.max_ncbs);
             if (offset + size >= buffsize) throw BrokenPacket;
             Footer.max_ncbs = get16(buff, offset);
             offset += size;
-            //no_transmit_buffers;
             size = Marshal.SizeOf(Footer.no_transmit_buffers);
             if (offset + size >= buffsize) throw BrokenPacket;
             Footer.no_transmit_buffers = get16(buff, offset);
             offset += size;
 
-            //seems always throw BrokenPacket if add codes below,havent find the reason yet.The struct may wrong?
-
-            ////max_datagram;
-            //size = Marshal.SizeOf(Footer.max_datagram);
-            //if (offset + size >= buffsize) throw BrokenPacket;
-            //Footer.max_datagram = get16(buff, offset);
-            //offset += size;
-            ////pending_sessions;
-            //size = Marshal.SizeOf(Footer.pending_sessions);
-            //if (offset + size >= buffsize) throw BrokenPacket;
-            //Footer.pending_sessions = get16(buff, offset);
-            //offset += size;
-            ////max_sessions;
-            //size = Marshal.SizeOf(Footer.max_sessions);
-            //if (offset + size >= buffsize) throw BrokenPacket;
-            //Footer.max_sessions = get16(buff, offset);
-            //offset += size;
-            ////packet_sessions;
-            //size = Marshal.SizeOf(Footer.packet_sessions);
-            //if (offset + size >= buffsize) throw BrokenPacket;
-            //Footer.packet_sessions = get16(buff, offset);
-            //offset += size;
-            //
             HostInfo.footer = Footer;
-            #endregion
 
             return HostInfo;
         }
 
-        static Dictionary<string, string> DeviceType = new Dictionary<string, string>()
+        static Dictionary<string, string> VendorMap = new Dictionary<string, string>()
         {
             { "00-0C-29","Vmware"},
             { "00-50-56","Vmware"},
@@ -356,28 +295,9 @@ namespace SharpNBTScan
         {
             string Device = "";
             string key = BitConverter.ToString(address, 0, 3);
-            if (DeviceType.ContainsKey(key))
-                Device = DeviceType[key];
+            if (VendorMap.ContainsKey(key))
+                Device = VendorMap[key];
             return Device;
         }
-
-
-        #region [INCOMPLETE] service identification
-        ////when you want to identify service,put it in
-
-        //static Dictionary<char, string> ServiceType = new Dictionary<char, string>()
-        //{
-        //    { '\x1c',"DC"},
-        //};
-
-        //public static string ServiceParser(char chrService)
-        //{
-        //    string ServiceName = "";
-        //    if(ServiceType.ContainsKey(chrService))
-        //        ServiceName=ServiceType[chrService];
-        //    return ServiceName;
-        //}
-
-        #endregion
     }
 }

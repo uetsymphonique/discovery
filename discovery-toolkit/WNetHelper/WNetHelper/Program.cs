@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -6,11 +6,10 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 
-namespace SharpNBTScan
+namespace WNetHelper
 {
     class Program
     {
-        #region NetBIOS NameQuery
         static byte[] NameQuery =
         {
             0x00,0x00,0x00,0x00,0x00,0x01,0x00,0x00,
@@ -21,13 +20,10 @@ namespace SharpNBTScan
             0x41,0x41,0x41,0x41,0x41,0x00,0x00,0x21,
             0x00,0x01
         };
-        #endregion
 
-        #region  UDP Client Config Params
         static bool IsUdpcRecvStart = false;
         static UdpClient UdpClient = null;
         static IPEndPoint RemoteIPEndPoint = null;
-        #endregion
 
         public static void StartReceive()
         {
@@ -37,14 +33,13 @@ namespace SharpNBTScan
             UdpClient.BeginReceive(RecieveMessage, udpState);
         }
 
-        public static void NameQueryResponseResolver(byte[] NameQueryResponse, IPAddress address)
+        public static void ResolveResponse(byte[] response, IPAddress address)
         {
-            nb_host_info HostInfo = new nb_host_info();
+            HostRecord HostInfo = new HostRecord();
             try
             {
-                HostInfo = NBNSResolver.NBNSParser(NameQueryResponse, NameQueryResponse.Length);
-            
-                #region identify  groupname\computername and service
+                HostInfo = PacketParser.ParseResponse(response, response.Length);
+
                 string ComputerName = "";
                 string GroupName = "";
                 bool IsComputerName = true;
@@ -67,14 +62,10 @@ namespace SharpNBTScan
                     {
                         ServiceName = "DC";
                     }
-
                 }
-                #endregion
 
-                #region identify device via mac
                 String Device = "";
-                Device = NBNSResolver.MACParser(HostInfo.footer.adapter_address);
-                #endregion
+                Device = PacketParser.MACParser(HostInfo.footer.adapter_address);
 
                 Console.WriteLine(String.Format("{0,-15}", address) + String.Format("{0,-30}", GroupName + '\\' + ComputerName)
                     + String.Format("{0,-10}", ServiceName) + String.Format("{0,-15}", Device));
@@ -94,11 +85,11 @@ namespace SharpNBTScan
                 IPEndPoint iPEndPoint = udpState.IP;
                 if (IsUdpcRecvStart)
                 {
-                    byte[] NameQueryResponse = udpClient.EndReceive(asyncResult, ref iPEndPoint);
+                    byte[] response = udpClient.EndReceive(asyncResult, ref iPEndPoint);
                     udpClient.BeginReceive(RecieveMessage, udpState);
-                    if (NameQueryResponse.Length != 0)
+                    if (response.Length != 0)
                     {
-                        NameQueryResponseResolver(NameQueryResponse, iPEndPoint.Address);
+                        ResolveResponse(response, iPEndPoint.Address);
                     }
                 }
             }
@@ -123,15 +114,11 @@ namespace SharpNBTScan
             }
         }
 
-        #region cidr parser
         private static List<string> Network2IpRange(string sNetwork)
         {
             string[] iparray = new string[0];
             List<string> iparrays = iparray.ToList();
-            uint ip,        /* ip address */
-            mask,       /* subnet mask */
-            broadcast,  /* Broadcast address */
-            network;    /* Network address */
+            uint ip, mask, broadcast, network;
             int bits;
             string[] elements = sNetwork.Split(new Char[] { '/' });
             if (elements.Length == 1) { iparrays.Add(sNetwork); return iparrays; }
@@ -141,7 +128,7 @@ namespace SharpNBTScan
             network = ip & mask;
             broadcast = network + ~mask;
             uint usableIps = (bits > 30) ? 0 : (broadcast - network - 1);
-            Console.WriteLine("[+] ip range {0} - {1} ", Int2IP(network + 1), Int2IP(broadcast - 1));
+            Console.WriteLine("Scanning {0} - {1}", Int2IP(network + 1), Int2IP(broadcast - 1));
             for (uint i = 1; i < usableIps + 1; i++)
             {
                 iparrays.Add(Int2IP(network + i));
@@ -172,40 +159,99 @@ namespace SharpNBTScan
             sb.Append(ipInt & 0xFF);
             return sb.ToString();
         }
-        #endregion
+
+        static void RunScan(string cidr)
+        {
+            UdpClient = new UdpClient(0);
+            uint IOC_IN = 0x80000000;
+            uint IOC_VENDOR = 0x18000000;
+            uint SIO_UDP_CONNRESET = IOC_IN | IOC_VENDOR | 12;
+            UdpClient.Client.IOControl((int)SIO_UDP_CONNRESET, new byte[] { Convert.ToByte(false) }, null);
+            StartReceive();
+            List<string> ips = Network2IpRange(cidr);
+            foreach (string ip in ips)
+            {
+                IPEndPoint remoteIPEndPoint = new IPEndPoint(IPAddress.Parse(ip), 137);
+                UdpClient.Send(NameQuery, NameQuery.Length, remoteIPEndPoint);
+            }
+            Thread.Sleep(10000);
+            IsUdpcRecvStart = false;
+            UdpClient.Close();
+        }
+
+        static void RunLocal()
+        {
+            SystemProfile.Run();
+            SessionInfo.Run();
+            ProcessCounter.Run();
+            ServiceRegistry.Run();
+            GroupMembership.Run();
+            PathEnumerator.Run();
+        }
+
+        static void SetVerbose()
+        {
+            Diag.Verbose = true;
+            PerfCounter.Verbose = true;
+        }
+
+        static void PrintUsage()
+        {
+            Console.WriteLine("Usage: WNetHelper.exe <cidr>");
+            Console.WriteLine("       WNetHelper.exe scan <cidr>");
+            Console.WriteLine("       WNetHelper.exe local");
+            Console.WriteLine("       WNetHelper.exe all <cidr>");
+            Console.WriteLine("  Add -v for verbose output");
+        }
 
         static void Main(string[] args)
         {
             try
             {
-                if (args.Length != 1)
+                var argList = new List<string>();
+                foreach (string a in args)
                 {
-                    Console.WriteLine("[-]usage: SharpNBTScan.exe TargetIp (e.g.: SharpNBTScan.exe 192.168.0.1/24)");
+                    if (a == "-v" || a == "/v")
+                        SetVerbose();
+                    else
+                        argList.Add(a);
+                }
+
+                if (argList.Count == 0)
+                {
+                    PrintUsage();
                     return;
                 }
-                string sNetwork = args[0];
-                UdpClient = new UdpClient(0);
-                uint IOC_IN = 0x80000000;
-                uint IOC_VENDOR = 0x18000000;
-                uint SIO_UDP_CONNRESET = IOC_IN | IOC_VENDOR | 12;
-                UdpClient.Client.IOControl((int)SIO_UDP_CONNRESET, new byte[] { Convert.ToByte(false) }, null);
-                Console.WriteLine("[*]Start udp client ...");
-                StartReceive();
-                List<string> ips = Network2IpRange(sNetwork);
-                foreach (string ip in ips)
+
+                string mode = argList[0].ToLower();
+
+                if (mode == "local")
                 {
-                    IPEndPoint remoteIPEndPoint = new IPEndPoint(IPAddress.Parse(ip), 137);
-                    UdpClient.Send(NameQuery, NameQuery.Length, remoteIPEndPoint);
+                    RunLocal();
                 }
-                Console.WriteLine("[+]Udp client will stop in 10 s ...");
-                Thread.Sleep(10000);
-                Console.WriteLine("[*]Stop udp client ...");
-                IsUdpcRecvStart = false;
-                UdpClient.Close();
+                else if (mode == "scan" && argList.Count >= 2)
+                {
+                    Console.WriteLine("[HOSTS]");
+                    RunScan(argList[1]);
+                }
+                else if (mode == "all" && argList.Count >= 2)
+                {
+                    RunLocal();
+                    Console.WriteLine("[HOSTS]");
+                    RunScan(argList[1]);
+                }
+                else if (argList.Count == 1 && mode != "scan" && mode != "all")
+                {
+                    RunScan(argList[0]);
+                }
+                else
+                {
+                    PrintUsage();
+                }
             }
             catch (Exception ex)
             {
-                Console.WriteLine("[!]Error: {0}", ex.Message);
+                Console.WriteLine("Error: {0}", ex.Message);
             }
         }
     }
