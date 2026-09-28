@@ -4,7 +4,7 @@
 
 ## Build
 
-From `discovery-toolkit\` (directory containing the `.sln`):
+From `discovery-toolkit\` (the `.sln` lives one level down at `discovery-toolkit\WNetHelper\WNetHelper.sln`):
 
 ```cmd
 msbuild WNetHelper\WNetHelper.sln /p:Configuration=Release /p:Platform="Any CPU" /nologo /verbosity:minimal
@@ -14,7 +14,7 @@ msbuild WNetHelper\WNetHelper.sln /p:Configuration=Release /p:Platform="Any CPU"
 
 | Flag | Effect |
 |---|---|
-| `/p:Configuration=Release` | Optimized build, no debug symbols |
+| `/p:Configuration=Release` | Optimized build, pdb-only symbols (`WNetHelper.pdb` is emitted next to the exe but not deployed to the lab host) |
 | `/p:Platform="Any CPU"` | Required - the solution does not define a `x64` platform entry for Release |
 
 ## Output
